@@ -1,41 +1,37 @@
-# VIT-AP V-TOP Interactive CLI 🚀
+# 🎓 VIT-AP V-TOP CLI Dashboard
 
-A fast, lightweight, and asynchronous command-line interface for accessing VIT-AP V-TOP data. This tool allows students to check their academic records without navigating the slow web portal.
+A high-performance, asynchronous Command Line Interface (CLI) for VIT-AP students to access V-TOP services instantly. Built with Python, this tool bypasses the heavy web UI to provide academic data in a clean, terminal-based format.
 
-## ✨ Features
-- **Profile & Proctor:** Quick view of your basic details and faculty proctor info.
-- **Academic Transcript:** Clean view of grades, credits, and overall CGPA (duplicates filtered).
-- **Smart Attendance:** Summary view with "Safe Bunks" and "Required Classes" indicators.
-- **Attendance Drill-down:** Select a subject to see exactly when you were marked absent.
-- **Timetable:** View your full weekly schedule or just "Today's Schedule."
-- **Internal Marks:** Detailed breakdown of CAT-1, CAT-2, and Quizzes.
+---
 
-## 🛠️ Prerequisites
-- Python 3.10 or higher
-- `pip` (Python package manager)
+## 🚀 Key Features
 
-## 🚀 Installation & Setup
+### 📊 Academic Transcript
+- **Regex-Cleaned:** Automatically filters out redundant sub-rows (ETL/ETH/ELA) to show a clean course list.
+- **Auto-Summary:** Displays CGPA, Credits Earned, and Registered Credits at a glance.
 
-1. **Clone/Download** this repository to your local machine.
-2. **Install Dependencies**:
-   Open your terminal in the project folder and run:
-   ```bash
-   pip install -r requirements.txt
+### 📅 Attendance Intelligence
+- **Drill-down History:** Select any course to view a date-wise log of every "Present" and "Absent" mark.
+- **Visual Indicators:** Color-coded (🔴/🟢) status markers for subjects below 75%.
+- **Slot Formatting:** Shortened slot names (e.g., `C1+TC1`) for better readability.
 
-   Configure Credentials:
+### 🕒 Smart Scheduling
+- **Today's Schedule:** Instantly view only the classes you have today, sorted by time.
+- **Full Timetable:** A complete weekly breakdown organized by day order.
 
-Locate the credentials.txt file (or create one).
+### 📝 Internal Marks
+- View a structured breakdown of CAT-1, CAT-2, and Quiz marks for all registered courses.
 
-Line 1: Enter your Registration Number (e.g., 24BCE7058).
+---
 
-Line 2: Enter your V-TOP Password. Note: Ensure there are no extra spaces or characters.
+## 🛠️ Installation
 
-🖥️ Usage
-Run the main script to start the interactive dashboard:
+### 1. Prerequisites
+Ensure you have **Python 3.10+** installed. You can check this by running:
+```bash
+python --version
 
-Bash
-python vtop.py
-🔒 Security & Privacy
-Local Only: Your credentials are stored only on your computer in credentials.txt.
+2. Setup
+Clone the project or unzip the shared folder.
 
-Privacy Tip: Never push your credentials.txt to a public GitHub repository. Use a .gitignore file to prevent accidental uploads.
+Install requirements:
