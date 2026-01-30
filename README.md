@@ -41,11 +41,10 @@ pip install -r requirements.txt
 3. Configuration
 The script requires a file named credentials.txt in the root directory. Create credentials.txt and format it exactly as follows:
 
-Line 1: Your Registration Number (e.g., 24BCE7058)
-
+Line 1: Your Registration Number 
 Line 2: Your V-TOP Password
 
-Note: Do not add any spaces, commas, or extra lines to this file.
+Note: Do not add any spaces, commas, or extra lines to this file. 
 
 🖥️ Usage
 Simply run the main script to enter the interactive dashboard:
