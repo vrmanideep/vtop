@@ -20,6 +20,11 @@ A high-performance, asynchronous Command Line Interface (CLI) for VIT-AP student
 - **Full Timetable:** A comprehensive weekly breakdown organized by day order.
 
 ---
+## 🔗 Acknowledgments & Sources
+This CLI is powered by the core scraping logic from the **VIT-AP Student Project**. 
+- **Core Library:** `vitap_vtop_client`
+- **Official Documentation:** [pub.dev/documentation/vit_vtop](https://pub.dev/documentation/vit_vtop/latest/)
+- **Organization:** [VITAP Student Project Team](https://github.com/VITAP-Student-Project)
 
 ## 🛠️ Installation
 
