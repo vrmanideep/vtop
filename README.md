@@ -25,11 +25,52 @@ A high-performance, asynchronous Command Line Interface (CLI) for VIT-AP student
 
 ### 1. Prerequisites
 Ensure you have **Python 3.10+** installed. You can verify this by running:
-```bash
+```python
 python --version
----
+```
+
 2. Setup
 Clone the project or unzip the shared folder to your preferred directory.
 
 Install requirements: Open your terminal in the project folder and run:
 
+```python
+pip install -r requirements.txt
+```
+
+3. Configuration
+The script requires a file named credentials.txt in the root directory. Create credentials.txt and format it exactly as follows:
+
+Line 1: Your Registration Number (e.g., 24BCE7058)
+
+Line 2: Your V-TOP Password
+
+Note: Do not add any spaces, commas, or extra lines to this file.
+
+🖥️ Usage
+Simply run the main script to enter the interactive dashboard:
+
+```python
+python vtop.py
+```
+
+Navigation Tips:
+Option 3: After viewing the Attendance Summary, enter the S.No of a specific course to pull its date-wise history.
+
+Option 8: Use this first if you want to view data from a previous semester.
+
+⚠️ Security Warning
+DO NOT SHARE YOUR credentials.txt FILE. This file contains your plain-text password.
+
+If you are uploading this project to GitHub, ensure credentials.txt is added to your .gitignore file.
+
+Before sharing this folder with friends, delete your credentials and provide a blank template.
+
+🛠️ Tech Stack
+Language: Python (Asyncio)
+
+Networking: HTTPX (Asynchronous HTTP Client)
+
+Parsing: BeautifulSoup4 & LXML (Robust HTML Scraping)
+
+Client: Custom vitap_vtop_client integration
