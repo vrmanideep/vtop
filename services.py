@@ -138,6 +138,27 @@ def _patched_init(self, *args, **kwargs):
     _original_init(self, *args, **kwargs)
 httpx.AsyncClient.__init__ = _patched_init
 
+def save_calendar_cache(data: list, filename: str = "calendar_cache.json") -> bool:
+    """Dumps the parsed calendar list into a local JSON file for instant UI rendering."""
+    try:
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4)
+        return True
+    except Exception as e:
+        print(f"   [!] Failed to save calendar cache: {e}")
+        return False
+
+def load_calendar_cache(filename: str = "calendar_cache.json") -> list:
+    """Loads the parsed calendar list from the local JSON file."""
+    if not os.path.exists(filename):
+        return []
+    try:
+        with open(filename, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"   [!] Failed to load calendar cache: {e}")
+        return []
+
 async def vtopClientLogin(client: VtopClient) -> bool:
     try:
         await client._perform_login_sequence()
@@ -536,23 +557,26 @@ async def fetchMarks(client, semesterId: str) -> dict:
             
             col2_text = cols[2].get_text(strip=True) if len(cols) > 2 else ""
             
+            # Detect Outer Course Row
             if re.match(r'^[A-Z]{3,}\d{3,}', col2_text): 
                 if current_course: courses_data.append(current_course)
                 
                 title = cols[3].get_text(strip=True) if len(cols) > 3 else "Unknown"
+                c_type = cols[4].get_text(strip=True) if len(cols) > 4 else ""
                 current_course = {
                     "course_code": col2_text,
                     "course_title": title,
+                    "course_type": c_type,
                     "details": []
                 }
                 continue 
             
+            # Detect Inner Marks Row (Structural Check: First column must be a Serial Number)
             if current_course and len(cols) >= 6: 
-                mark_title = cols[1].get_text(strip=True)
+                sl_no = cols[0].get_text(strip=True)
                 
-                valid_types = ["CAT", "FAT", "Assignment", "Digital", "Quiz", "Lab", "Project", "Mid-Term", "performance", "Classroom", "Experiment", "Venture"]
-                
-                if any(v.lower() in mark_title.lower() for v in valid_types) and "Total" not in mark_title:
+                if sl_no.isdigit():
+                    mark_title = cols[1].get_text(strip=True)
                     max_mark = cols[2].get_text(strip=True)
                     weightage_pct = cols[3].get_text(strip=True) if len(cols) > 3 else "-"
                     status = cols[4].get_text(strip=True)
@@ -587,6 +611,212 @@ async def fetchMarks(client, semesterId: str) -> dict:
     except Exception as e:
         print(f"   [!] Marks fetch error: {e}")
         return {}
+
+async def fetchGrades(client, semester_id: str) -> list:
+    """
+    Fetches the overview of grades for a specific semester.
+    Returns a list of dictionaries containing the course code, title, grand total, and final grade.
+    """
+    import re
+    from bs4 import BeautifulSoup
+    
+    print(f"   [.] Fetching Grades for {semester_id}...")
+    url = "https://vtop.vitap.ac.in/vtop/examinations/examGradeView/doStudentGradeView"
+    
+    try:
+        token = getattr(client, "csrf_token", "")
+        reg_no = get_auth_id(client)
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": "https://vtop.vitap.ac.in/vtop/content"
+        }
+        
+        # This endpoint uses multipart/form-data
+        multipart_data = {
+            "authorizedID": (None, reg_no),
+            "semesterSubId": (None, semester_id),
+            "_csrf": (None, token)
+        }
+
+        response = await client._client.post(url, files=multipart_data, headers=headers)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        grades_data = []
+        
+        # Structural parser: We loop through rows and look for columns starting with a digit
+        for row in soup.find_all('tr'):
+            cols = row.find_all('td')
+            if len(cols) >= 8:
+                sl_no = cols[0].get_text(strip=True)
+                
+                if sl_no.isdigit():
+                    code = cols[1].get_text(strip=True)
+                    title = cols[2].get_text(strip=True)
+                    c_type = cols[3].get_text(strip=True)
+                    g_type = cols[4].get_text(strip=True)
+                    total = cols[5].get_text(strip=True)
+                    grade = cols[6].get_text(strip=True)
+                    
+                    # Extract the hidden courseId used to fetch detailed breakdown marks
+                    course_id = ""
+                    btn = cols[7].find('button')
+                    if btn and btn.has_attr('onclick'):
+                        match = re.search(r"getGradeViewDetails\((?:'|&#39;)(.*?)(?:'|&#39;)\)", btn['onclick'])
+                        if match:
+                            course_id = match.group(1)
+                            
+                    grades_data.append({
+                        "course_code": code,
+                        "course_title": title,
+                        "course_type": c_type,
+                        "grading_type": g_type,
+                        "grand_total": total,
+                        "grade": grade,
+                        "course_id": course_id
+                    })
+                    
+        return grades_data
+        
+    except Exception as e:
+        print(f"   [!] Grades fetch error: {e}")
+        return []
+
+async def fetchGradeDetails(client, semester_id: str, course_id: str) -> list:
+    """
+    Fetches the detailed mark breakdown and class grading statistics.
+    Returns a list of all currently expanded subjects in the VTOP session, 
+    separated neatly with their respective stats and components.
+    """
+    import time
+    import re
+    from bs4 import BeautifulSoup
+    
+    url = "https://vtop.vitap.ac.in/vtop/examinations/examGradeView/getGradeViewDetails"
+    
+    try:
+        token = getattr(client, "csrf_token", "")
+        reg_no = get_auth_id(client)
+        
+        payload = {
+            "authorizedID": reg_no,
+            "semesterSubId": semester_id,
+            "courseId": course_id,
+            "_csrf": token,
+            "x": time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime())
+        }
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            "X-Requested-With": "XMLHttpRequest",
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "Referer": "https://vtop.vitap.ac.in/vtop/content"
+        }
+
+        response = await client._client.post(url, data=payload, headers=headers)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        expanded_courses = []
+        current_course = None
+
+        # Linearly scan rows to group the correct stats/marks under their respective subjects
+        for tr in soup.find_all('tr'):
+            cols = [td for td in tr.find_all(['td', 'th']) if td.parent == tr]
+            if not cols: continue
+            
+            # 1. Detect a Main Subject Row
+            if len(cols) >= 8:
+                sl_no = cols[0].get_text(strip=True)
+                code = cols[1].get_text(strip=True)
+                if sl_no.isdigit() and re.match(r'^[A-Z]{3,}\d{3,}', code):
+                    current_course = {
+                        "code": code,
+                        "title": cols[2].get_text(strip=True),
+                        "stats": None,
+                        "components": []
+                    }
+                    expanded_courses.append(current_course)
+                    continue
+            
+            # 2. Detect the Expanded Details Container for the Current Subject
+            if current_course and len(cols) == 1 and cols[0].has_attr('colspan'):
+                for tbl in cols[0].find_all('table'):
+                    text = tbl.get_text(" ", strip=True).lower()
+                    
+                    # Parse Class Statistics
+                    if "mean" in text and "sd" in text and "range of grades" in text:
+                        rows = tbl.find_all('tr')
+                        if len(rows) >= 3:
+                            val_cols = rows[-1].find_all(['td', 'th'])
+                            if len(val_cols) >= 11:
+                                current_course["stats"] = {
+                                    "class_strength": val_cols[0].get_text(strip=True),
+                                    "grading_strength": val_cols[1].get_text(strip=True),
+                                    "mean": val_cols[2].get_text(strip=True),
+                                    "sd": val_cols[3].get_text(strip=True),
+                                    "S": val_cols[4].get_text(strip=True),
+                                    "A": val_cols[5].get_text(strip=True),
+                                    "B": val_cols[6].get_text(strip=True),
+                                    "C": val_cols[7].get_text(strip=True),
+                                    "D": val_cols[8].get_text(strip=True),
+                                    "E": val_cols[9].get_text(strip=True),
+                                    "F": val_cols[10].get_text(strip=True),
+                                }
+                                
+                    # Parse Component Marks Table (Theory, Lab, etc.)
+                    elif "mark title" in text and "scored mark" in text:
+                        comp = {"class_number": "N/A", "course_type": "N/A", "marks": [], "total": "0.0"}
+                        parent_text = tbl.parent.get_text(" ", strip=True)
+                        
+                        m1 = re.search(r"Class Number\s*:\s*([A-Z0-9]+)", parent_text, re.IGNORECASE)
+                        if m1: comp["class_number"] = m1.group(1).strip()
+                        
+                        m2 = re.search(r"Course Type\s*:\s*(.*?)(?=Sl\.?No|Max\.? Mark|$)", parent_text, re.IGNORECASE)
+                        if m2: comp["course_type"] = m2.group(1).replace("Sl", "").replace("No", "").replace(".", "").strip()
+
+                        total_wgt = 0.0
+                        explicit_total = None
+                        
+                        for c_tr in tbl.find_all('tr'):
+                            c_cols = c_tr.find_all(['td', 'th'])
+                            if not c_cols: continue
+                            
+                            row_txt = c_tr.get_text(" ", strip=True).lower()
+                            c_sl_no = c_cols[0].get_text(strip=True)
+                            
+                            # Valid assessment row
+                            if c_sl_no.isdigit() and len(c_cols) >= 6:
+                                if not c_cols[1].get_text(strip=True).replace('.', '', 1).isdigit():
+                                    wgt_mark = c_cols[6].get_text(strip=True) if len(c_cols) > 6 else "-"
+                                    try: total_wgt += float(wgt_mark)
+                                    except: pass
+                                    
+                                    comp["marks"].append({
+                                        "mark_title": c_cols[1].get_text(strip=True),
+                                        "max_mark": c_cols[2].get_text(strip=True),
+                                        "weightage_pct": c_cols[3].get_text(strip=True) if len(c_cols) > 3 else "-",
+                                        "status": c_cols[4].get_text(strip=True) if len(c_cols) > 4 else "-",
+                                        "scored_mark": c_cols[5].get_text(strip=True) if len(c_cols) > 5 else "-",
+                                        "weightage_mark": wgt_mark
+                                    })
+                            
+                            # Native VTOP Total Row
+                            elif "total" in row_txt and "grand" not in row_txt and not c_sl_no.isdigit():
+                                tot = c_cols[-1].get_text(strip=True)
+                                if tot.replace('.', '', 1).isdigit():
+                                    explicit_total = tot
+
+                        comp["total"] = explicit_total if explicit_total else f"{total_wgt:.2f}"
+                        if comp["marks"]:
+                            current_course["components"].append(comp)
+
+        # Return only the subjects that have actual expanded data available
+        return [c for c in expanded_courses if c["stats"] or c["components"]]
+        
+    except Exception as e:
+        print(f"   [!] Grade details fetch error: {e}")
+        return []
 
 async def fetchExamSchedule(client, semester_id):
     url = "https://vtop.vitap.ac.in/vtop/examinations/doSearchExamScheduleForStudent"
@@ -659,7 +889,7 @@ async def fetchExamSchedule(client, semester_id):
     except Exception as e:
         print(f"   [!] fetchExamSchedule Error: {e}")
         return []
-
+#print(client.__dict__)
 async def fetchAttendance(client: VtopClient, semesterId: str) -> List[Dict[str, Any]]:
     url = "https://vtop.vitap.ac.in/vtop/processViewStudentAttendance"
     try:
@@ -1688,6 +1918,148 @@ async def fetchDADetails(client, class_id):
         print(f"   [!] Error fetching DA details: {e}")
         return []
 
+async def fetchAndSaveCalendarCOMB(client, sem_sub_id: str, cal_date: str) -> str:
+    """
+    Simulates the 'All Class Group (Combined)' routing flow and dumps the HTML payload.
+    """
+    import time
+    import re
+    
+    base_url = "https://vtop.vitap.ac.in/vtop"
+    
+    # Actively scrape fresh CSRF token
+    dash_res = await client._client.get(f"{base_url}/content")
+    csrf_match = re.search(r'name="_csrf"\s+value="([a-f0-9-]+)"', dash_res.text)
+    token = csrf_match.group(1) if csrf_match else getattr(client, "csrf_token", "")
+    reg_no = get_auth_id(client)
+    
+    headers = {
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'X-Requested-With': 'XMLHttpRequest',
+        'Origin': 'https://vtop.vitap.ac.in',
+        'Referer': 'https://vtop.vitap.ac.in/vtop/content?'
+    }
+
+    # Step 1: Calendar Preview
+    await client._client.post(
+        f"{base_url}/academics/common/CalendarPreview",
+        data={'verifyMenu': 'true', 'authorizedID': reg_no, '_csrf': token, 'nocache': '@(new Date().getTime())'},
+        headers=headers
+    )
+
+    # Step 2: Get Date For Semester Preview
+    await client._client.post(
+        f"{base_url}/getDateForSemesterPreview",
+        data={
+            '_csrf': token, 
+            'paramReturnId': 'getDateForSemesterPreview', 
+            'semSubId': sem_sub_id, 
+            'authorizedID': reg_no,
+            'x': time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime())
+        },
+        headers=headers
+    )
+
+    # Step 3: Process View Calendar (COMB)
+    payload = {
+        '_csrf': token,
+        'calDate': cal_date,
+        'semSubId': sem_sub_id,
+        'classGroupId': 'COMB',
+        'authorizedID': reg_no,
+        'x': time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime())
+    }
+    
+    res = await client._client.post(
+        f"{base_url}/processViewCalendar",
+        data=payload,
+        headers=headers
+    )
+
+    filename = f"calendar_COMB_{sem_sub_id}_{cal_date}.html"
+    with open(filename, 'w', encoding='utf-8') as f:
+        f.write(res.text)
+        
+    return filename
+
+async def fetchAndSaveCalendarALL(client, sem_sub_id: str, cal_date: str) -> str:
+    """
+    Simulates the 'General Semester' routing flow and dumps the HTML payload.
+    """
+    import time
+    import re
+    
+    base_url = "https://vtop.vitap.ac.in/vtop"
+    
+    # Actively scrape fresh CSRF token
+    dash_res = await client._client.get(f"{base_url}/content")
+    csrf_match = re.search(r'name="_csrf"\s+value="([a-f0-9-]+)"', dash_res.text)
+    token = csrf_match.group(1) if csrf_match else getattr(client, "csrf_token", "")
+    reg_no = get_auth_id(client)
+    
+    headers = {
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'X-Requested-With': 'XMLHttpRequest',
+        'Origin': 'https://vtop.vitap.ac.in',
+        'Referer': 'https://vtop.vitap.ac.in/vtop/content?'
+    }
+
+    # Step 1: Calendar Preview
+    await client._client.post(
+        f"{base_url}/academics/common/CalendarPreview",
+        data={'verifyMenu': 'true', 'authorizedID': reg_no, '_csrf': token, 'nocache': '@(new Date().getTime())'},
+        headers=headers
+    )
+
+    # Step 2: Get Date For Semester Preview
+    await client._client.post(
+        f"{base_url}/getDateForSemesterPreview",
+        data={
+            '_csrf': token, 
+            'paramReturnId': 'getDateForSemesterPreview', 
+            'semSubId': sem_sub_id, 
+            'authorizedID': reg_no,
+            'x': time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime())
+        },
+        headers=headers
+    )
+
+    # Step 3: Get List For Semester (Unique to ALL)
+    await client._client.post(
+        f"{base_url}/getListForSemester",
+        data={
+            '_csrf': token, 
+            'paramReturnId': 'getListForSemester', 
+            'semSubId': sem_sub_id, 
+            'classGroupId': 'ALL', 
+            'authorizedID': reg_no,
+            'x': time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime())
+        },
+        headers=headers
+    )
+
+    # Step 4: Process View Calendar (ALL)
+    payload = {
+        '_csrf': token,
+        'calDate': cal_date,
+        'semSubId': sem_sub_id,
+        'classGroupId': 'ALL',
+        'authorizedID': reg_no,
+        'x': time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime())
+    }
+    
+    res = await client._client.post(
+        f"{base_url}/processViewCalendar",
+        data=payload,
+        headers=headers
+    )
+
+    filename = f"calendar_ALL_{sem_sub_id}_{cal_date}.html"
+    with open(filename, 'w', encoding='utf-8') as f:
+        f.write(res.text)
+        
+    return filename
+
 def generate_da_report(da_data):
     from colorama import Fore, Style
     if not da_data:
@@ -1871,7 +2243,6 @@ def simulate_multi_day_bunk(valid_dates, timetable_data, attendance_data, blocke
     return result_msg
 
 async def open_vtop_browser(client):
-    import tempfile
     import subprocess
     import sys
     import os
@@ -1898,7 +2269,10 @@ async def open_vtop_browser(client):
         print(f"   {Fore.RED}[x] No cookies found in session. Are you logged in?")
         return
 
-    temp_dir = tempfile.gettempdir()
+    # Route temporary files to a local 'cache' folder
+    temp_dir = os.path.join(os.getcwd(), "cache")
+    os.makedirs(temp_dir, exist_ok=True)
+    
     cookies_file = os.path.join(temp_dir, "vtop_session_cookies.json")
     runner_file  = os.path.join(temp_dir, "vtop_browser_login.py")
     log_file     = os.path.join(temp_dir, "vtop_browser_log.txt")
@@ -1928,8 +2302,9 @@ async def run():
         cookies = json.load(f)
 
     async with async_playwright() as p:
+        # Isolated Playwright session stored safely in the local cache
         user_data_dir = os.path.join(
-            os.environ.get("TEMP", os.path.expanduser("~")),
+            {repr(temp_dir)},
             "vtop_browser_session"
         )
         os.makedirs(user_data_dir, exist_ok=True)
@@ -1940,13 +2315,13 @@ async def run():
                 channel="chrome",       
                 headless=False,
                 args=["--start-maximized"],
-                viewport=None,
+                no_viewport=True,
                 ignore_https_errors=True  
             )
         except Exception:
             browser = await p.chromium.launch(headless=False, args=["--start-maximized"])
             context = await browser.new_context(
-                viewport=None,
+                no_viewport=True,
                 ignore_https_errors=True
             )
 
@@ -1956,32 +2331,31 @@ async def run():
         except Exception as e:
             print(f"[!] Cookie injection warning: {{e}}", flush=True)
 
-        page = await context.new_page()
+        # --- FIX: GRAB THE DEFAULT TAB TO PREVENT ABOUT:BLANK ---
+        if len(context.pages) > 0:
+            page = context.pages[0]
+        else:
+            page = await context.new_page()
 
         # --- FIX: HANDLE DOWNLOADS PROPERLY ---
         async def handle_download(download):
             try:
-                # Route downloads to your actual Windows Downloads folder
                 downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads", "VTOP_Browser_Downloads")
                 os.makedirs(downloads_dir, exist_ok=True)
                 
-                # Extract the real file name (e.g., Syllabus.pdf)
                 filename = download.suggested_filename
                 final_path = os.path.join(downloads_dir, filename)
                 
-                # Notice the DOUBLE curly braces here!
                 print(f"\\n[.] Downloading: {{filename}}...", flush=True)
                 await download.save_as(final_path)
                 print(f"[+] Saved to: {{final_path}}", flush=True)
             except Exception as e:
                 print(f"\\n[x] Download error: {{e}}", flush=True)
 
-        # Attach download listener to the main page
         page.on("download", handle_download)
-        
-        # Attach download listener to any new tabs the user opens (like when viewing outpasses)
         context.on("page", lambda new_page: new_page.on("download", handle_download))
         # --------------------------------------
+        
         print("[.] Opening VTOP dashboard...", flush=True)
         try:
             await page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=30000)

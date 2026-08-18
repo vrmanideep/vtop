@@ -738,15 +738,19 @@ async def main():
                 import os
                 
                 try:
-                    if os.path.exists("bunk_cache.json"):
-                        with open("bunk_cache.json", "r") as f:
-                            cache = json.load(f)
+                    if os.path.exists("calendar_COMB_cache.json"):
+                        with open("calendar_COMB_cache.json", "r", encoding="utf-8") as f:
+                            calendar_data = json.load(f)
                             
-                        sem_starts = cache.get("semester_starts", {})
-                        
-                        if current_sem_name in sem_starts:
-                            start_date_str = sem_starts[current_sem_name]
-                            start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+                        # Find the first instructional day dynamically
+                        start_date_str = None
+                        for event in calendar_data:
+                            if "First Instructional Day" in event.get("particulars", ""):
+                                start_date_str = event.get("date")
+                                break
+                                
+                        if start_date_str:
+                            start_date = datetime.strptime(start_date_str, "%d-%b-%Y").date()
                             today = datetime.now().date()
                             
                             if today < start_date:
@@ -991,33 +995,23 @@ async def main():
                                     if not safe_name: safe_name = "downloaded_material"
                                     return len(glob.glob(os.path.join(save_dir, f"{safe_name}.*"))) > 0
 
-                                def format_general_name(code, title, index):
-                                    t_lower = title.lower()
-                                    if "syllabus" in t_lower:
-                                        return f"{code}-syllabus"
-                                    elif "reference-material" in t_lower or "reference material" in t_lower:
-                                        match = re.search(r'reference[- ]material[- _]*([ivxIVX\d]+)', t_lower)
-                                        if match:
-                                            numeral = match.group(1).upper()
-                                            return f"{code}- Reference material - {numeral}"
-                                        return f"{code}- Reference material - {index}"
-                                    else:
-                                        return f"{code}-{title[:30]}"
-
                                 while True:
                                     print(f"\n   {PEACH}ACTIONS:")
                                     print(f"   {Fore.WHITE}[1, 2..] Enter S.No(s) to download")
-                                    print(f"   {Fore.WHITE}[G1, G2] Enter G1, G2.. to download General Material")
                                     print(f"   {Fore.WHITE}[A]      Download ALL materials")
                                     print(f"   {Fore.RED}[0]      Back to Subject List") 
                                     
                                     dl_choice = input(f"\n   {PEACH}Choice: {Fore.WHITE}").strip().upper()
                                     if dl_choice == '0': break 
                                     
-                                    def get_short_date(date_str):
+                                    def get_custom_date(date_str):
                                         if not date_str: return "UnknownDate"
-                                        parts = date_str.split('-')
-                                        return f"{parts[0]}-{parts[1]}" if len(parts) >= 2 else date_str
+                                        try:
+                                            from datetime import datetime
+                                            # Converts VTOP's "12-Jul-2026" to "12-Jul-26"
+                                            return datetime.strptime(date_str, "%d-%b-%Y").strftime("%d-%b-%y")
+                                        except Exception:
+                                            return date_str.replace(" ", "")
 
                                     if dl_choice == 'A':
                                         print(f"   {Fore.CYAN}[.] Requesting ZIP bundle from VTOP servers...")
@@ -1034,41 +1028,52 @@ async def main():
                                                 print(f"   {Fore.GREEN}[✓] Downloaded ZIP bundle to: {filepath}")
                                             else:
                                                 print(f"   {Fore.RED}[x] Failed to download ZIP bundle.")
-
-                                    elif dl_choice.startswith('G'):
-                                        try:
-                                            g_idx = int(dl_choice[1:]) - 1
-                                            if 0 <= g_idx < len(c_page['general']):
-                                                item = c_page['general'][g_idx]
-                                                fname = format_general_name(selected_code, item['title'], g_idx+1)
-                                                
-                                                if check_exists(fname):
-                                                    print(f"   {PEACH}[-] File already exists: {fname}")
-                                                else:
-                                                    print(f"   {Fore.CYAN}[.] Downloading {fname[:60]}...")
-                                                    res, filepath = await download_course_material(client, item['download_path'], save_dir, fname)
-                                                    if res: print(f"   {Fore.GREEN}[✓] Saved to: {filepath}")
-                                                    else: print(f"   {Fore.RED}[x] Failed: {filepath}")
-                                            else:
-                                                print(f"   {Fore.RED}[!] Invalid G number.")
-                                        except ValueError: 
-                                            print(f"   {Fore.RED}[!] Invalid input format.")
-
-                                    elif all(part.strip().isdigit() for part in dl_choice.split(',')):
-                                        choices = [x.strip() for x in dl_choice.split(',')]
+                                    elif any(char.isdigit() for char in dl_choice):
+                                        parsed_choices = set()
+                                        valid_input = True
                                         
-                                        for choice in choices:
-                                            target_sno = int(choice)
-                                            target_lec = next((l for l in c_page['lectures'] if l['s_no'] == target_sno), None)
+                                        # Smart parser for commas, hyphens, and "to"
+                                        for part in dl_choice.split(','):
+                                            part = part.strip().lower()
+                                            if not part: continue
                                             
+                                            if '-' in part or ' to ' in part:
+                                                separator = '-' if '-' in part else ' to '
+                                                bounds = [b.strip() for b in part.split(separator)]
+                                                
+                                                if len(bounds) == 2 and bounds[0].isdigit() and bounds[1].isdigit():
+                                                    start, end = int(bounds[0]), int(bounds[1])
+                                                    if start > end: start, end = end, start # Swap if backwards
+                                                    for num in range(start, end + 1):
+                                                        parsed_choices.add(num)
+                                                else:
+                                                    valid_input = False
+                                                    break
+                                            elif part.isdigit():
+                                                parsed_choices.add(int(part))
+                                            else:
+                                                valid_input = False
+                                                break
+                                                
+                                        if not valid_input or not parsed_choices:
+                                            print(f"   {Fore.RED}[!] Invalid format. Use numbers (1, 3) or ranges (1-5, 8 to 10).")
+                                            continue
+                                            
+                                        choices = sorted(list(parsed_choices))
+                                        
+                                        for target_sno in choices:
+                                            target_lec = next((l for l in c_page['lectures'] if l['s_no'] == target_sno), None)
+
                                             if target_lec:
-                                                short_date = get_short_date(target_lec.get('date', ''))
+                                                custom_date = get_custom_date(target_lec.get('date', ''))
                                                 safe_topic = re.sub(r'[\\/*?:"<>|]', "", target_lec['topic']).strip()
+                                                sno_padded = f"{target_sno:02d}" # Pads 1 to "01"
                                                 downloads_started = False
                                                 
                                                 if target_lec.get('download_path'):
                                                     downloads_started = True
-                                                    fname = f"{short_date}_{selected_code}_{safe_topic}"
+                                                    fname = f"{selected_code}_L{sno_padded}_{custom_date}_{safe_topic}"
+                                                    
                                                     if check_exists(fname): 
                                                         print(f"   {PEACH}[-] Main file exists: {fname[:60]}...")
                                                     else:
@@ -1078,7 +1083,8 @@ async def main():
                                                 
                                                 for r_idx, r_path in enumerate(target_lec.get('ref_paths', [])):
                                                     downloads_started = True
-                                                    fname = f"{short_date}_{selected_code}_{safe_topic}_Ref_{r_idx+1}"
+                                                    fname = f"{selected_code}_L{sno_padded}_{custom_date}_{safe_topic}_Ref{r_idx+1:02d}"
+                                                    
                                                     if check_exists(fname): 
                                                         print(f"   {PEACH}[-] Reference exists: {fname[:60]}...")
                                                     else:
@@ -1098,6 +1104,7 @@ async def main():
                                                 print(f"   {Fore.RED}[!] Lecture S.No {target_sno} not found.")
                                     else:
                                         print(f"   {Fore.RED}[!] Invalid command.")
+
                         except ValueError:
                             print(f"   {Fore.RED}[!] Please enter a valid number.")
 
@@ -1515,31 +1522,39 @@ async def main():
 
                         print(f"\n   {PEACH}{Style.BRIGHT}[ BUNK SIMULATOR ]")
                         current_year = dt_obj.now().year
-                        if os.path.exists("bunk_cache.json"):
+                        
+                        if os.path.exists("calendar_COMB_cache.json"):
                             try:
-                                with open("bunk_cache.json", "r") as f:
-                                    cache_data = json.load(f)
-                                    if isinstance(cache_data, dict) and "blocked_dates" in cache_data:
-                                        b_dates = cache_data["blocked_dates"]
-                                        if b_dates:
-                                            today_dt = dt_obj.now().replace(hour=0, minute=0, second=0, microsecond=0)
-                                            print(f"   {Fore.CYAN}[i] Upcoming Non-Instructional, Exam Days and Holidays:")
+                                with open("calendar_COMB_cache.json", "r", encoding="utf-8") as f:
+                                    calendar_data = json.load(f)
+                                    
+                                    today_dt = dt_obj.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                                    print(f"   {Fore.CYAN}[i] Upcoming Non-Instructional, Exam Days and Holidays:")
+                                    
+                                    printed_any = False
+                                    for event in calendar_data:
+                                        parts = event.get("particulars", "")
+                                        # Filter out standard working days (Keep Holidays, Exams, etc.)
+                                        if "Instructional Day (Working Day)" not in parts:
+                                            try:
+                                                event_date = dt_obj.strptime(event["date"], "%d-%b-%Y")
+                                                # Convert to dd-mm for the simulator engine
+                                                day_month = event_date.strftime("%d-%m")
+                                                academic_calendar_blocks[day_month] = parts
+                                                
+                                                # Only print future events to the user
+                                                if event_date >= today_dt:
+                                                    day_name = event_date.strftime("%A")
+                                                    print(f"       {Fore.WHITE}{event['date']} -- {PEACH}{day_name:<9}{Fore.WHITE} -- {parts}")
+                                                    printed_any = True
+                                            except Exception:
+                                                pass 
                                             
-                                            printed_any = False
-                                            for d_str, purpose in b_dates.items():
-                                                try:
-                                                    event_date = dt_obj.strptime(f"{d_str}-{current_year}", "%d-%m-%Y")
-                                                    if event_date >= today_dt:
-                                                        day_name = event_date.strftime("%A")
-                                                        print(f"       {Fore.WHITE}{d_str} -- {PEACH}{day_name:<9}{Fore.WHITE} -- {purpose}")
-                                                        printed_any = True
-                                                except Exception:
-                                                    pass 
-                                                    
-                                            if not printed_any:
-                                                print(f"       {PEACH}(No upcoming holidays/exams found)")
-                                            print(f"   {Fore.CYAN}" + "-"*45)
-                            except Exception: pass
+                                    if not printed_any:
+                                        print(f"       {PEACH}(No upcoming holidays/exams found)")
+                                    print(f"   {Fore.CYAN}" + "-"*45)
+                            except Exception as e: 
+                                print(f"   {Fore.RED}[!] Could not parse calendar: {e}")
 
                         bunk_input = input(f"   {PEACH}Enter dates (e.g. 21-4, 28-4 to 2-5, 5-5): {Fore.WHITE}").strip()
                         if not bunk_input: continue
@@ -1615,16 +1630,6 @@ async def main():
                                         
                                     await asyncio.sleep(0.4)
                                 except Exception: pass
-
-                        academic_calendar_blocks = {}
-                        if os.path.exists("bunk_cache.json"):
-                            try:
-                                with open("bunk_cache.json", "r") as f:
-                                    cache_data = json.load(f)
-                                    if isinstance(cache_data, dict) and "blocked_dates" in cache_data:
-                                        for date_str, reason in cache_data["blocked_dates"].items():
-                                            academic_calendar_blocks[date_str] = str(reason)
-                            except Exception: pass
 
                         report = services.simulate_multi_day_bunk(valid_dates, timetable_data, attendance_data, academic_calendar_blocks)
                         print(report)
